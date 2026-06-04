@@ -7,7 +7,7 @@
 <meta name="theme-color" content="#5c3540">
 <link rel="manifest" href="/manifest.json">
 <link rel="apple-touch-icon" sizes="180x180" href="/icons/icon-180.png">
-<link rel="apple-touch-icon" sizes="192x192" href="/icons/icon-192.png">
+<link rel="apple-touch-icon" sizes="192x192" href="/icons/apple-touch-icon-192.png">
 <link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192.png">
 <link rel="icon" type="image/png" sizes="512x512" href="/icons/icon-512.png">
 <link rel="shortcut icon" href="/icons/icon-192.png">
@@ -4269,8 +4269,8 @@ function gpsAcceptPoint(p){
   if(!gpsRide || !gpsRide.active) return false;
   tickGaitTime(p.time);
 
-  // Accept rougher accuracy so distance/speed actually start counting on phones.
-  if(p.accuracy > 120){
+  // Strikteres Genauigkeits-Gate: alles schlechter als ±35 m verwerfen.
+  if(p.accuracy > 35){
     updateGpsStatus("GPS-Signal noch zu ungenau (±"+Math.round(p.accuracy)+" m). Bitte kurz warten.");
     return false;
   }
@@ -4285,19 +4285,21 @@ function gpsAcceptPoint(p){
   }
 
   const dt = (p.time - gpsRide.lastPoint.time) / 1000;
-  if(dt < 1) return false;
+  // Mindestens 2 s zwischen Punkten, sonst zu viel Rauschen.
+  if(dt < 2) return false;
 
   const km = haversineKm(gpsRide.lastPoint, p);
   const meters = km * 1000;
   const rawSpeed = km / (dt / 3600); // km/h
   const devSpeed = p.deviceSpeed != null ? p.deviceSpeed : null;
-  const speed = devSpeed != null ? devSpeed : rawSpeed;
 
-  // Minimal movement threshold scales with GPS accuracy but stays small enough to register a walking horse.
-  const minMoveMeters = Math.max(3, Math.min(10, p.accuracy * 0.25));
+  // Bewegung muss größer sein als die kombinierte Messunsicherheit (Strava-Prinzip).
+  // -> verhindert Phantom-Distanz beim Stehen.
+  const uncertainty = (p.accuracy + gpsRide.lastPoint.accuracy) * 0.7;
+  const minMoveMeters = Math.max(6, uncertainty);
 
-  // Stillstand filter
-  if(meters < minMoveMeters && speed < 1.2){
+  // Stillstand: Punkt aktualisieren, aber nicht zur Strecke zählen.
+  if(meters < minMoveMeters || (devSpeed != null && devSpeed < 1.0 && rawSpeed < 2.0)){
     gpsRide.stationarySeconds += dt;
     gpsRide.currentSpeed = 0;
     gpsRide.lastPoint = p;
@@ -4306,14 +4308,25 @@ function gpsAcceptPoint(p){
     return false;
   }
 
-  // Reject obviously broken jumps (>80 km/h or >2 km in one tick).
-  if(rawSpeed > 80 || km > 2){
+  // Unplausible Sprünge (>70 km/h oder >1,5 km in einem Tick) ignorieren.
+  if(rawSpeed > 70 || km > 1.5){
     updateGpsStatus("Unplausibler GPS-Sprung ignoriert.");
     return false;
   }
 
+  // Wenn Gerät 0 km/h meldet, obwohl wir Distanz „sehen“ -> wahrscheinlich Drift.
+  if(devSpeed != null && devSpeed < 0.5 && rawSpeed > 4){
+    updateGpsStatus("GPS-Drift erkannt – Segment verworfen.");
+    return false;
+  }
+
+  // Geschwindigkeit: bevorzugt deviceSpeed, sonst geglättet (EMA) gegen Zittern.
+  const chosenSpeed = devSpeed != null ? devSpeed : rawSpeed;
+  const prevDisplay = gpsRide.currentSpeed || 0;
+  const smoothed = prevDisplay * 0.5 + chosenSpeed * 0.5;
+
   gpsRide.distance += km;
-  gpsRide.currentSpeed = Math.max(0, Math.min(80, speed));
+  gpsRide.currentSpeed = Math.max(0, Math.min(70, smoothed));
   const hours = Math.max(0.001, gpsDurationMs()/3600000);
   gpsRide.avgSpeed = gpsRide.distance / hours;
   gpsRide.lastPoint = p;
@@ -4324,6 +4337,7 @@ function gpsAcceptPoint(p){
   updateGpsStatus("GPS läuft · "+gpsRide.points.length+" Punkte · ±"+Math.round(p.accuracy)+" m");
   return true;
 }
+
 
 function updateGpsStatus(text){
   const el=document.getElementById("gpsMapStatus");
@@ -4511,7 +4525,7 @@ function startGpsRide(){
   }, err=>{
     updateGpsStatus("GPS-Fehler: " + err.message);
     toast("GPS konnte nicht gestartet werden: "+err.message);
-  }, {enableHighAccuracy:true,maximumAge:1000,timeout:15000});
+  }, {enableHighAccuracy:true,maximumAge:0,timeout:20000});
 
   toast("GPS-Ausritt gestartet");
   renderRide();
