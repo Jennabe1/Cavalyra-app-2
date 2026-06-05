@@ -2559,7 +2559,12 @@ const CAVALYRA_LICENSE_CONFIG = {
   customerPortalUrl: "https://customer-portal.paddle.com/cpl_01ksj34k26v4xebfvgtnb3xbf9",
   checkEndpoint: "/.netlify/functions/check-license"
 };
-const CAVALYRA_LICENSE_STORAGE_KEYS = ["cavalyra_license", "cavalyra_license_v1", "cavalyra_pro_license"];
+const CAVALYRA_LICENSE_STORAGE_KEYS = ["cavalyra_license", "cavalyra_license_v1", "cavalyra_pro_license", "cavalyra_pro_access"];
+
+function isLicenseAccessStatus(status){
+  const s = canonicalLicenseStatus(status);
+  return s === "pro" || s === "trial";
+}
 
 function canonicalLicenseStatus(status){
   const s = String(status || "").trim().toLowerCase();
@@ -2600,6 +2605,13 @@ function persistLicense(license){
     try{ localStorage.setItem(key, JSON.stringify(license)); }catch(_){}
     try{ sessionStorage.setItem(key, JSON.stringify(license)); }catch(_){}
   });
+  if(isLicenseAccessStatus(license && license.status)){
+    try{ localStorage.setItem("cavalyra_pro_unlocked", "1"); }catch(_){}
+    try{ sessionStorage.setItem("cavalyra_pro_unlocked", "1"); }catch(_){}
+  } else {
+    try{ localStorage.removeItem("cavalyra_pro_unlocked"); }catch(_){}
+    try{ sessionStorage.removeItem("cavalyra_pro_unlocked"); }catch(_){}
+  }
 }
 
 function normalizeLicense(){
@@ -2608,7 +2620,7 @@ function normalizeLicense(){
   current.status = canonicalLicenseStatus(current.status || (current.pro ? "pro" : "free"));
   state.license = stored && licenseRank(stored.status) > licenseRank(current.status) ? stored : current;
   state.license.status = canonicalLicenseStatus(state.license.status || (state.license.pro ? "pro" : "free"));
-  state.license.pro = state.license.status === "pro" || state.license.status === "trial";
+  state.license.pro = isLicenseAccessStatus(state.license.status);
   return state.license;
 }
 
@@ -2617,7 +2629,7 @@ function saveLicense(force){
   else {
     state.license = state.license || {};
     state.license.status = canonicalLicenseStatus(state.license.status || (state.license.pro ? "pro" : "free"));
-    state.license.pro = state.license.status === "pro" || state.license.status === "trial";
+    state.license.pro = isLicenseAccessStatus(state.license.status);
   }
   save("license", state.license);
   persistLicense(state.license);
@@ -2760,8 +2772,13 @@ function trialDaysLeft(){
 
 
 function hasProAccess(){
-  normalizeLicense();
-  return state.license.status==="pro" || (state.license.status==="trial" && trialDaysLeft()>0);
+  const lic = normalizeLicense();
+  if(lic.status === "pro") return true;
+  if(lic.status === "trial"){
+    if(lic.validUntil) return new Date(lic.validUntil) > new Date();
+    return true;
+  }
+  return false;
 }
 
 
