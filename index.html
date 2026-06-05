@@ -2636,9 +2636,11 @@ async function checkCavalyraLicenseStatus(){
       throw new Error(data && data.message ? data.message : "Status konnte nicht geprüft werden.");
     }
 
+    const newStatus = data.status || "free";
+    const isPro = newStatus === "pro" || newStatus === "trial";
     state.license = {
-      status: data.status || "free",
-      pro: data.status === "pro" || data.status === "trial",
+      status: newStatus,
+      pro: isPro,
       email: email,
       source: "paddle-check",
       checkedAt: new Date().toISOString(),
@@ -2648,8 +2650,14 @@ async function checkCavalyraLicenseStatus(){
     };
     saveLicense();
 
-    toast(data.status === "pro" || data.status === "trial" ? "Pro-Status bestätigt" : "Kein aktives Pro-Abo gefunden");
-    render();
+    toast(isPro ? "Pro-Status bestätigt" : "Kein aktives Pro-Abo gefunden");
+
+    if(isPro){
+      // Vollständigen Reload erzwingen, damit alle Pro-Sperren in allen Screens sicher aufgehoben werden
+      setTimeout(()=>{ try { location.reload(); } catch(_){} }, 700);
+    } else {
+      render();
+    }
   }catch(err){
     console.error("License check failed", err);
     toast("Lizenzprüfung aktuell nicht möglich. Bitte später erneut versuchen.");
