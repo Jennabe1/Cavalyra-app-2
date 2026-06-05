@@ -1,5 +1,5 @@
 /* Cavalyra Service Worker – installable PWA, network-first navigation */
-const CACHE_VERSION = "cavalyra-v12";
+const CACHE_VERSION = "cavalyra-v13";
 const SHELL = [
   "/",
   "/index.html",

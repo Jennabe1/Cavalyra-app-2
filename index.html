@@ -2559,28 +2559,78 @@ const CAVALYRA_LICENSE_CONFIG = {
   customerPortalUrl: "https://customer-portal.paddle.com/cpl_01ksj34k26v4xebfvgtnb3xbf9",
   checkEndpoint: "/.netlify/functions/check-license"
 };
+const CAVALYRA_LICENSE_STORAGE_KEYS = ["cavalyra_license", "cavalyra_license_v1", "cavalyra_pro_license"];
+
+function canonicalLicenseStatus(status){
+  const s = String(status || "").trim().toLowerCase();
+  if(["pro", "active", "paid", "valid", "subscribed"].includes(s)) return "pro";
+  if(["trial", "trialing"].includes(s)) return "trial";
+  if(["past_due", "past-due", "payment_failed"].includes(s)) return "past_due";
+  if(["expired", "paused"].includes(s)) return "expired";
+  if(["canceled", "cancelled"].includes(s)) return "canceled";
+  return "free";
+}
+
+function licenseRank(status){
+  return ({ pro:5, trial:4, past_due:3, expired:2, canceled:1, free:0 })[canonicalLicenseStatus(status)] || 0;
+}
+
+function readStoredLicense(){
+  const stores = [];
+  try{ stores.push(localStorage); }catch(_){}
+  try{ stores.push(sessionStorage); }catch(_){}
+  let best = null;
+  stores.forEach(store=>{
+    CAVALYRA_LICENSE_STORAGE_KEYS.forEach(key=>{
+      try{
+        const raw = store.getItem(key);
+        if(!raw) return;
+        const parsed = JSON.parse(raw);
+        if(!parsed || typeof parsed !== "object") return;
+        parsed.status = canonicalLicenseStatus(parsed.status || (parsed.pro ? "pro" : "free"));
+        if(!best || licenseRank(parsed.status) > licenseRank(best.status)) best = parsed;
+      }catch(_){}
+    });
+  });
+  return best;
+}
+
+function persistLicense(license){
+  CAVALYRA_LICENSE_STORAGE_KEYS.forEach(key=>{
+    try{ localStorage.setItem(key, JSON.stringify(license)); }catch(_){}
+    try{ sessionStorage.setItem(key, JSON.stringify(license)); }catch(_){}
+  });
+}
 
 function normalizeLicense(){
-  state.license = state.license || {};
-  if(!state.license.status){
-    state.license.status = state.license.pro ? "pro" : "free";
-  }
-  if(["pro","trial","free","expired","past_due","canceled"].indexOf(state.license.status) === -1){
-    state.license.status = "free";
-  }
+  const stored = readStoredLicense();
+  const current = state.license || {};
+  current.status = canonicalLicenseStatus(current.status || (current.pro ? "pro" : "free"));
+  state.license = stored && licenseRank(stored.status) > licenseRank(current.status) ? stored : current;
+  state.license.status = canonicalLicenseStatus(state.license.status || (state.license.pro ? "pro" : "free"));
+  state.license.pro = state.license.status === "pro" || state.license.status === "trial";
   return state.license;
 }
 
-function saveLicense(){
+function saveLicense(force){
+  if(!force) normalizeLicense();
+  else {
+    state.license = state.license || {};
+    state.license.status = canonicalLicenseStatus(state.license.status || (state.license.pro ? "pro" : "free"));
+    state.license.pro = state.license.status === "pro" || state.license.status === "trial";
+  }
   save("license", state.license);
+  persistLicense(state.license);
 }
 
 function licenseEmail(){
-  return localStorage.getItem("cavalyra_license_email") || "";
+  try{ return localStorage.getItem("cavalyra_license_email") || sessionStorage.getItem("cavalyra_license_email") || ""; }catch(_){ return ""; }
 }
 
 function setLicenseEmail(email){
-  localStorage.setItem("cavalyra_license_email", String(email || "").trim().toLowerCase());
+  const value = String(email || "").trim().toLowerCase();
+  try{ localStorage.setItem("cavalyra_license_email", value); }catch(_){}
+  try{ sessionStorage.setItem("cavalyra_license_email", value); }catch(_){}
 }
 
 function licenseStatusLabel(){
@@ -2636,7 +2686,7 @@ async function checkCavalyraLicenseStatus(){
       throw new Error(data && data.message ? data.message : "Status konnte nicht geprüft werden.");
     }
 
-    const newStatus = data.status || "free";
+    const newStatus = canonicalLicenseStatus(data.status || (data.active ? "pro" : "free"));
     const isPro = newStatus === "pro" || newStatus === "trial";
     state.license = {
       status: newStatus,
@@ -2648,12 +2698,12 @@ async function checkCavalyraLicenseStatus(){
       subscriptionId: data.subscriptionId || "",
       customerId: data.customerId || ""
     };
-    saveLicense();
+    saveLicense(true);
 
     toast(isPro ? "Pro-Status bestätigt" : "Kein aktives Pro-Abo gefunden");
 
     if(isPro){
-      // Vollständigen Reload erzwingen, damit alle Pro-Sperren in allen Screens sicher aufgehoben werden
+      render();
       setTimeout(()=>{ try { location.reload(); } catch(_){} }, 700);
     } else {
       render();
