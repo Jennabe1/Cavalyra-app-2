@@ -3630,23 +3630,50 @@ async function startCavalyraBodyScan(){
       photos.push({ position: pos, dataUrl: small });
     }
 
-    const res = await fetch(CAVALYRA_SCAN_ENDPOINT, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ photos, horseName: activeHorseName() })
-    });
+    const payload = JSON.stringify({ photos, horseName: activeHorseName() });
+    const ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVwYnViaWZkY25kZnhidm1nd3pnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzk5NTg5MjEsImV4cCI6MjA5NTUzNDkyMX0.f3OQwrVb-mRrr045ia_jcduC8NlOFJghRJFjJkM1qzc";
+    const headers = {
+      "Content-Type": "application/json",
+      "apikey": ANON_KEY,
+      "Authorization": "Bearer " + ANON_KEY
+    };
 
-    if(!res.ok){
-      const j = await res.json().catch(()=>({}));
-      const msg = j && j.error ? j.error : `Analyse fehlgeschlagen (${res.status})`;
-      toast(msg);
-      if(btn){ btn.disabled = false; btn.textContent = "Cavalyra Body Scan auswerten"; }
-      return false;
+    // Retry-Logik: Cold-Start der Edge Function kann den ersten Versuch killen
+    async function callScan(){
+      return await fetch(CAVALYRA_SCAN_ENDPOINT, { method:"POST", headers, body: payload });
     }
 
-    const { analysis } = await res.json();
+    let res, analysis = null, lastErrMsg = "";
+    for(let attempt = 1; attempt <= 2; attempt++){
+      try{
+        if(btn && attempt > 1) btn.textContent = "Analyse läuft… (2. Versuch)";
+        res = await callScan();
+        if(!res.ok){
+          const j = await res.json().catch(()=>({}));
+          lastErrMsg = (j && j.error) ? j.error : `Analyse fehlgeschlagen (${res.status})`;
+          // bei 5xx / 408 / 429 nochmal versuchen, bei 4xx (außer 408/429) abbrechen
+          if(res.status >= 500 || res.status === 408 || res.status === 429){
+            await new Promise(r=>setTimeout(r, 800));
+            continue;
+          }
+          toast(lastErrMsg);
+          if(btn){ btn.disabled = false; btn.textContent = "Cavalyra Body Scan auswerten"; }
+          return false;
+        }
+        const json = await res.json().catch(()=>null);
+        analysis = json && json.analysis;
+        if(analysis) break;
+        lastErrMsg = "Analyse-Antwort war leer. Bitte erneut versuchen.";
+        await new Promise(r=>setTimeout(r, 800));
+      }catch(netErr){
+        lastErrMsg = "Netzwerkfehler bei der Analyse.";
+        console.warn("Body scan attempt failed", attempt, netErr);
+        await new Promise(r=>setTimeout(r, 800));
+      }
+    }
+
     if(!analysis){
-      toast("Analyse-Antwort war leer. Bitte erneut versuchen.");
+      toast(lastErrMsg || "Analyse fehlgeschlagen. Bitte erneut versuchen.");
       if(btn){ btn.disabled = false; btn.textContent = "Cavalyra Body Scan auswerten"; }
       return false;
     }
